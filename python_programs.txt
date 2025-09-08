@@ -1,0 +1,1301 @@
+Author: Mitchell Hung
+Date: 08/22/2025'
+Notes: Excel files should match Excel Format Template
+
+Table of Contents:
+
+Plot One Raman.py
+Plot Large Area Scan.py
+Plot All Unique Seperation.py
+Plot All Overlaid.py
+KBr Volume vs FWHM.py
+FWHM vs Peak Height Ratio.py
+Data Renormalization.py
+Fake Data Constructor.py
+ICA, PCA, NMF Analysis
+-- Spectrum Reconstruction.py
+-- PCA Visualization.py
+-- PCA Explained Variance.py
+-- NMF Explained Variance.py
+-- ICA Explained Variance.py
+-- IC1 vs IC2.py
+------------------------------------------------------------------------
+Plot One Raman.py
+Description: Plots a singular Raman Spectrum given an Excel File and the Column.
+How to Use: Upload data in the same format as "Excel Format Template".
+
+# %matplotlib qt
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+from matplotlib.cm import get_cmap
+import seaborn as sns
+
+file_path = "example.xlsx"
+
+# === Load the dataset ===
+df = pd.read_excel(file_path)
+col_index = 0  # or use: np.random.randint(spectra_df.shape[1])
+
+
+# === Extract x-axis (Raman shift values) from the first column ===
+wavenumbers = df.iloc[:, 0].values
+
+# === Extract spectral data (excluding the first column) ===
+spectra_df = df.iloc[:, 1:]
+
+# === Randomly select one column (spectrum/sample) ===
+col_name = spectra_df.columns[col_index]
+spectrum = spectra_df.iloc[:, col_index].values
+
+# === Plot ===
+plt.figure(figsize=(10, 5))
+#plt.xlim(380,420)
+#plt.ylim(750, 1500)
+plt.plot(wavenumbers, spectrum, color='black', linewidth=2)
+plt.title(f"Raman Spectrum\nSample: {col_name}", fontsize=14)
+plt.xlabel("Raman Shift (cm$^{-1}$)")
+plt.ylabel("Intensity")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# === Print the sample name ===
+print(f"Sample name (column header): {col_name}")
+------------------------------------------------------------------------
+Plot Large Area Scan.py
+Description: Plots the Large Area Scan given its text file. Has options of plotting by Peak Separation Distance, Peak Height Ratios, or Peak FWHM Ratio.
+How To Use: Upload the csv file of the Large Area Scan from the WITec program (just change the extension name from .txt to .csv). Change square_size to be equal to the same resolution you took (300x300, 60x60, etc.) Change the variable graph to plot different features. Change target_regions to search for peaks in other areas. If the plot scale is incorrect/not representative of the data, change vmin and vmax to suit your needs (near the bottom of the program).
+Important Notes: Depending on the size of the file, this may take upwards of 5-10 minutes. Afterwards, all relevant data for plotting should be saved to an excel file. Then, you can set load_new_results to False, to skip the majority of loading time.
+
+
+
+import pandas as pd
+import numpy as np
+from scipy.signal import find_peaks
+import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
+
+load_new_results = True 
+file_path = "LAS_example.csv"
+square_size = 300 #Need to change this for different resolutions
+graph = 'FWHM' #change to FWHM, Ratio, or Separation to change output graph
+target_regions = [(380, 400), (400, 420)]  #change the peak locations if needed
+save_to_excel = "../peak_separations.xlsx"
+
+#If you need to change the scale on the graph, scroll to the bottom of this program and
+#look for "#Adjust the scale in the graph"
+
+
+# === Step 2: helper to find peak positions ===
+def find_peak_positions(y, x, target_regions):
+    peaks, _ = find_peaks(y)
+    peak_positions = x[peaks]
+    peak_values = y[peaks]
+    
+    found_peaks = []
+    found_indices = []
+    for region in target_regions:
+        mask = (peak_positions >= region[0]) & (peak_positions <= region[1])
+        if np.any(mask):
+            region_positions = peak_positions[mask]
+            region_values = peak_values[mask]
+            region_indices = peaks[mask]
+
+            idx = np.argmax(region_values)
+            peak_pos = region_positions[idx]
+            peak_val = region_values[idx]
+            peak_idx = region_indices[idx]
+            
+            if peak_val - 710 > 20: #assuming "20" is enough to distinguish from background
+                found_peaks.append(peak_pos)
+                found_peaks.append(peak_val)
+                found_indices.append(peak_idx)
+            else:
+                found_peaks.append(np.nan)
+                found_peaks.append(np.nan)
+                found_indices.append(np.nan)
+        else:
+            found_peaks.append(np.nan)
+            found_peaks.append(np.nan)
+            found_indices.append(np.nan)
+    #print(found_peaks)
+    return found_peaks, found_indices
+
+def calculate_fwhm(x, y, peak_index, baseline=None):
+    peak_height = y[peak_index]
+    
+    if baseline is None:
+        baseline = np.min(y)   # crude baseline estimate
+    
+    half_max = baseline + (peak_height - baseline) / 2.0
+    
+    # Left side
+    left_idx = np.where(y[:peak_index] < half_max)[0]
+    if len(left_idx) == 0:
+        return np.nan
+    left_idx = left_idx[-1]
+    f_left = interp1d(y[left_idx:peak_index+1], x[left_idx:peak_index+1])
+    x_left = f_left(half_max)
+    
+    # Right side
+    right_idx = np.where(y[peak_index:] < half_max)[0]
+    if len(right_idx) == 0:
+        return np.nan
+    right_idx = right_idx[0] + peak_index
+    f_right = interp1d(y[peak_index:right_idx+1], x[peak_index:right_idx+1])
+    x_right = f_right(half_max)
+    
+    return x_right - x_left
+
+if load_new_results:
+    df = pd.read_csv(file_path, delimiter="\t", engine='python', skip_blank_lines=True)
+
+    # Strip whitespace from all string columns (helps with hidden spaces)
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    
+    # Convert first column to numeric (scientific notation handled)
+    df.iloc[:, 0] = pd.to_numeric(df.iloc[:, 0], errors='coerce')
+    
+    # Convert remaining columns to numeric
+    spectra_df = df.iloc[:, 1:].apply(pd.to_numeric, errors='coerce')
+    
+    # Extract values
+    x = df.iloc[:, 0].values
+    labels = spectra_df.columns.tolist()
+        
+    # === Step 3: Loop through spectra ===
+    results = []
+    for col in spectra_df.columns:
+        y = spectra_df[col].astype(float).values
+        peaks_info, peak_indices = find_peak_positions(y, x, target_regions)
+        if not np.isnan(peaks_info[0]) and not np.isnan(peaks_info[2]):
+            separation = abs(peaks_info[2] - peaks_info[0])
+        else:   
+            separation = np.nan
+        
+        if not np.isnan(peak_indices[0]) and not np.isnan(peak_indices[1]):
+            fwhm1 = calculate_fwhm(x, y, int(peak_indices[0]))
+            fwhm2 = calculate_fwhm(x, y, int(peak_indices[1]))
+            if not np.isnan(fwhm1) and not np.isnan(fwhm2):
+                fwhm_ratio = fwhm2/fwhm1
+            else:
+                fwhm_ratio = np.nan
+        else:
+            fwhm_ratio = np.nan
+            
+            
+        results.append((col, peaks_info[0], peaks_info[2], peaks_info[1], peaks_info[3], separation, peaks_info[3]/peaks_info[1] if (peaks_info[1] and peaks_info[3]) else np.nan, fwhm_ratio))
+        
+    results_df = pd.DataFrame(results, columns=["Spectrum", "Peak1 (~390)", "Peak2 (~410)", "Peak1 Value", "Peak2 Value", "Separation", "Ratio", "FWHM"])    
+    results_df.to_excel(save_to_excel, index=False)
+
+results_df = pd.read_excel(save_to_excel)
+scale = results_df[graph].to_numpy()
+
+scale = np.where(pd.isna(scale), np.nan, scale)
+
+# Reshape into square
+if len(scale) != square_size**2:
+    raise ValueError(f"Expected {square_size**2} data points, got {len(scale)}")
+
+scale_square = scale.reshape((square_size, square_size))
+
+cmap = plt.cm.viridis
+cmap.set_bad(color='black')  # NaNs will appear black
+
+# Create one figure
+fig, ax = plt.subplots(figsize=(6,6))
+
+# Show background image
+
+# Overlay scale map
+cax = ax.imshow(
+    scale_square,
+    cmap=cmap,
+    interpolation='nearest',
+    alpha=1,              # adjust transparency
+    extent=[0, 300, 0, 300]
+    ,vmin = 0.6, vmax = 1.5 #Adjust the scale in the graph
+)
+
+# Add colorbar
+fig.colorbar(cax, ax=ax, label='Peak Height Ratio')
+
+ax.set_title('Raman Peak Height Ratio Map')
+ax.axis('off')
+plt.show()
+------------------------------------------------------------------------
+Plot All Unique Seperation.py
+Description: Finds x number of unique separations, then plots those graphs.
+How to Use: Change target_regions and file_path as needed. num_wanted corresponds to the number of unique separation you would like. 6 is default, but arbitrary. Feel free to change xlim and ylim as necessary (at the bottom of the program).
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks
+
+target_regions = [(385, 395), (405, 415)]  # around 390 and 410
+file_path = "example.xlsx"
+num_wanted = 6
+
+# === Step 1: Read Excel, skip 2nd row ===
+df = pd.read_excel(file_path, header=0)  # first row = labels
+df = df.drop(index=1)  # drop the useless second row
+
+# === Step 2: Extract x-axis and spectra ===
+x = df.iloc[:, 0].astype(float).values  # Raman shift
+spectra_df = df.iloc[:, 1:]  # all spectra columns
+labels = spectra_df.columns.tolist()
+
+# === Step 3: Find peaks near 390 and 410 ===
+def find_peak_positions(y, x, target_regions):
+    """Find peak positions in target regions given by [(min,max), ...]"""
+    peaks, _ = find_peaks(y)
+    peak_positions = x[peaks]
+    peak_values = y[peaks]
+    
+    found_peaks = []
+    for region in target_regions:
+        mask = (peak_positions >= region[0]) & (peak_positions <= region[1])
+        if np.any(mask):
+            # Pick the highest peak in the region
+            idx = np.argmax(peak_values[mask])
+            region_peaks = peak_positions[mask]
+            found_peaks.append(region_peaks[idx])
+        else:
+            found_peaks.append(np.nan)  # No peak found
+    return found_peaks
+
+peak_separations = []
+for i, col in enumerate(spectra_df.columns):
+    y = spectra_df[col].astype(float).values
+    p1, p2 = find_peak_positions(y, x, target_regions)
+    if not np.isnan(p1) and not np.isnan(p2):
+        separation = abs(p2 - p1)
+        peak_separations.append((i, p1, p2, separation))
+
+# === Step 4: Pick 6 spectra with unique separations ===
+unique_spectra = []
+used_separations = []
+for entry in sorted(peak_separations, key=lambda e: e[3]):  # sort by separation
+    if not any(abs(entry[3] - used) < 0.01 for used in used_separations):  
+        # 0.01 tolerance so close separations aren't "unique"
+        unique_spectra.append(entry)
+        used_separations.append(entry[3])
+    if len(unique_spectra) == num_wanted:
+        break
+
+# === Step 5: Plot ===
+plt.figure(figsize=(10, 6))
+for idx, p1, p2, sep in unique_spectra:
+    label = labels[idx]
+    plt.plot(x, spectra_df.iloc[:, idx], label=f"{label} | Δ = {sep:.2f} cm⁻¹")
+
+plt.xlim(375, 430)
+plt.ylim(700, 1700)
+plt.xlabel("Raman Shift (cm⁻¹)")
+plt.ylabel("Intensity (a.u.)")
+plt.title("6 Raman Spectra with Unique Peak Separations")
+plt.legend()
+plt.tight_layout()
+plt.show()
+------------------------------------------------------------------------
+Plot All Overlaid.py
+Description: Plots all Raman Spectra in the Excel File, overlaid.
+How to Use: Change file_path to your data. Change xlim and ylim to your preferences.
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+from matplotlib.cm import get_cmap
+import seaborn as sns
+from scipy.signal import find_peaks
+
+file_path = "example.xlsx"
+
+df = pd.read_excel(file_path)
+
+# === Extract x-axis (Raman shift values) from the first column ===
+wavenumbers = df.iloc[:, 0].values
+
+# === Extract spectral data (excluding the first column) ===
+spectra_df = df.iloc[:, 1:]
+
+# === Generate a color for each column ===
+colors = [
+    (0.0, 0.0, 0.9),
+    (0.80, 0.0, 0.0),
+    (0.25, 0.69, 0.65)
+    #(1.0, 0.75, 0.0),
+    #(0.0, 0.0, 0.0)
+]
+
+# === Plot all spectra overlaid ===
+plt.figure(figsize=(8, 10))
+plt.xlim(375, 430)
+plt.ylim(700, 1800)
+
+for i, col_name in enumerate(spectra_df.columns):
+    plt.plot(wavenumbers, spectra_df.iloc[:, i].values, color=colors[i], label=col_name, linewidth=4)
+
+
+#plt.legend(fontsize=8, bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.title("Overlaid Raman Spectra", fontsize=14)
+plt.xlabel("Raman Shift (cm$^{-1}$)")
+plt.ylabel("Intensity")
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+
+# === Function to compute peak separations for each spectrum ===
+def compute_peak_separations(wavenumbers, intensity, prominence=50):
+    peaks, _ = find_peaks(intensity, prominence=prominence)
+    peak_positions = wavenumbers[peaks]
+    separations = np.diff(peak_positions)
+    return peak_positions, separations
+
+# === Loop through each spectrum and compute peak separations ===
+for i, col_name in enumerate(spectra_df.columns):
+    intensity = spectra_df.iloc[:, i].values
+    peak_positions, separations = compute_peak_separations(wavenumbers, intensity)
+    
+    print(f"\nSpectrum: {col_name}")
+    print(f"  Peak Positions: {np.round(peak_positions, 2)} cm⁻¹")
+    print(f"  Separation Distances: {np.round(separations, 2)} cm⁻¹")
+------------------------------------------------------------------------
+KBr Volume vs FWHM.py
+Description: Plots Full-Width-Half-Max vs. KBr Volume
+How to Use: The current data is hardcoded in. You may need change the values. Specifically, the extract_day_label function may need to be changed.
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks, peak_widths, medfilt
+import re
+
+file_path = "example.xlsx"
+
+# === Load dataset ===
+df = pd.read_excel(file_path)
+
+wavenumbers = df.iloc[:, 0].values
+spectra_df = df.iloc[:, 1:]
+headers = df.columns[1:]
+
+# === Function to map Day to concentration label ===
+def extract_day_label(label):
+    match = re.match(r"(\d+)", label)
+    if not match:
+        return None
+    day = int(match.group(1))
+    if day in [1, 2]:
+        return "2mL KBr"
+    elif day == 7:
+        return "1mL KBr"
+    elif day == 10:
+        return "0.5mL KBr"
+    elif day == 15:
+        return "0.5mL KBr (diff. conditions)"
+    else:
+        return f"Day {day}"  # fallback in case of unexpected day
+
+# === Initialize storage ===
+all_fwhm = []
+group_labels = []
+
+# === Process each spectrum ===
+for col_name in headers:
+    spectrum = spectra_df[col_name].values
+    spectrum = medfilt(spectrum, kernel_size=5)
+
+    # Find peaks
+    peaks, _ = find_peaks(spectrum, height=100, distance=5)
+    if len(peaks) < 4:
+        continue  # Skip if not enough peaks
+
+    # Get top 4 peaks by intensity
+    top_peak_indices = peaks[np.argsort(spectrum[peaks])[-4:]]
+    selected = top_peak_indices[np.argsort(spectrum[top_peak_indices])[:2]]
+
+    # FWHM for each selected peak
+    for peak_idx in selected:
+        results_half = peak_widths(spectrum, [peak_idx], rel_height=0.5)
+        width_cm1 = results_half[0][0] * (wavenumbers[1] - wavenumbers[0])
+        all_fwhm.append(width_cm1)
+        group_labels.append(extract_day_label(col_name))
+
+# === Create DataFrame for plotting ===
+result_df = pd.DataFrame({
+    'Group': group_labels,
+    'FWHM': all_fwhm
+})
+
+# === Plot boxplot of FWHM grouped by concentration ===
+plt.figure(figsize=(8, 6))
+result_df.boxplot(column='FWHM', by='Group', grid=False)
+plt.title("FWHM by KBr Concentration / Growth Condition")
+plt.suptitle("")  # Remove automatic title
+plt.xlabel("Group")
+plt.ylabel("FWHM (cm$^{-1}$)")
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+------------------------------------------------------------------------
+FWHM vs Peak Height Ratio.py
+Description: Plots Full-Width-Half-Max versus Peak Height Ratio.
+How to Use: Change the file_path, change the day_to_volume legend if needed.
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks, peak_widths
+import mplcursors
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+from scipy.signal import medfilt  # Add this import at the top
+
+file_path = "example.xlsx"
+day_to_volume = {
+    "01": "2 mL KBr",
+    "02": "2 mL KBr",
+    "07": "1 mL KBr",
+    "10": "0.5 mL KBr",
+    "15": "0.5 mL KBr (alt growth)"
+}
+
+# === Load Raman Data ===
+df = pd.read_excel(file_path)
+
+# === Extract x-axis and spectra ===
+x_axis = df.iloc[:, 0].values
+data = df.iloc[:, 1:]
+
+# === Assign day labels ===
+def extract_day(label):
+    parts = str(label).split("|")
+    return parts[0].strip() if len(parts) > 1 else "Unknown"
+
+day_labels = [extract_day(col) for col in data.columns]
+
+# Get unique volume labels in the order they appear
+volume_labels = []
+seen = set()
+for day in day_labels:
+    label = day_to_volume.get(day, "Unknown")
+    if label not in seen:
+        volume_labels.append(label)
+        seen.add(label)
+
+# Assign a unique marker per volume
+marker_styles = ['o', 's', '^', 'D', 'P', 'X', 'v', '<', '>', '*']  # extend if needed
+volume_to_marker = {vol: marker_styles[i % len(marker_styles)] for i, vol in enumerate(volume_labels)}
+
+# === Storage ===
+plot_data = []  # Each item: (distance, ratio, fwhm, label, day)
+temp = 0
+
+
+# === Main Loop ===
+for i, col in enumerate(data.columns):
+    spectrum = data[col].values
+    
+    smoothed_spectrum = medfilt(spectrum, kernel_size=5)
+
+    
+    # Peak detection on filtered data
+    peaks, _ = find_peaks(smoothed_spectrum, prominence=10)
+
+    if len(peaks) >= 4:
+        # Get indices of top 4 peaks by height in filtered spectrum
+        top4_idx_unsorted = peaks[np.argsort(smoothed_spectrum[peaks])[-4:]]
+
+        # Pick two lesser peaks by height among top 4
+        top4_heights = smoothed_spectrum[top4_idx_unsorted]
+        two_lesser_indices_in_top4 = np.argsort(top4_heights)[:2]
+
+        selected_peaks_idx = top4_idx_unsorted[two_lesser_indices_in_top4]
+        selected_peaks_idx = selected_peaks_idx[np.argsort(x_axis[selected_peaks_idx])]
+
+        x_peaks = x_axis[selected_peaks_idx]
+        y_peaks = smoothed_spectrum[selected_peaks_idx]
+
+        dist = abs(x_peaks[1] - x_peaks[0])
+        #print(dist)
+        ratio = y_peaks[1] / y_peaks[0] if y_peaks[0] != 0 else np.nan
+
+        # Calculate FWHM on filtered data
+        widths_result = peak_widths(smoothed_spectrum, selected_peaks_idx, rel_height=0.5)
+        fwhms = widths_result[0]
+
+        def index_to_cm(index_diff):
+            return index_diff * (x_axis[1] - x_axis[0])
+
+        fwhm1 = index_to_cm(fwhms[0])
+        fwhm2 = index_to_cm(fwhms[1])
+
+        delta_x = 0.02
+
+        day = day_labels[i]
+        delta_fwhm = abs(fwhm2 - fwhm1)
+        
+        temp += delta_fwhm
+        
+        label_base = f"{col}\nΔFWHM: {delta_fwhm:.2f} cm⁻¹"
+
+        plot_data.append((dist - delta_x, ratio, fwhm1, f"{label_base}\nPeak 1\nFWHM: {fwhm1:.2f}", day))
+        plot_data.append((dist + delta_x, ratio, fwhm2, f"{label_base}\nPeak 2\nFWHM: {fwhm2:.2f}", day))
+
+
+    else:
+        print(f"{col}: Not enough peaks found (found {len(peaks)})")
+
+# === Group into pairs and compute statistics ===
+delta_fwhm_array = []
+delta_ratio_array = []
+
+for i in range(0, len(plot_data), 2):
+    if i + 1 < len(plot_data):
+        _, ratio1, fwhm1, _, _ = plot_data[i]
+        _, ratio2, fwhm2, _, _ = plot_data[i + 1]
+
+        delta_fwhm = abs(fwhm1 - fwhm2)
+        delta_ratio = abs(ratio1 - ratio2)
+
+        delta_fwhm_array.append(delta_fwhm)
+        delta_ratio_array.append(delta_ratio)
+
+# Convert to numpy arrays
+delta_fwhm_array = np.array(delta_fwhm_array)
+delta_ratio_array = np.array(delta_ratio_array)
+
+# === Compute statistics ===
+mean_delta_fwhm = np.nanmean(delta_fwhm_array)
+std_delta_fwhm = np.nanstd(delta_fwhm_array)
+
+mean_delta_ratio = np.nanmean(delta_ratio_array)
+std_delta_ratio = np.nanstd(delta_ratio_array)
+
+# Optional symmetry mask (define your own threshold)
+fwhm_thresh = 0.5
+ratio_thresh = 0.01
+symmetry_mask = (delta_fwhm_array < fwhm_thresh) & (delta_ratio_array < ratio_thresh)
+symmetry_percent = np.sum(symmetry_mask) / len(delta_fwhm_array) * 100
+
+# === Print results ===
+print(f"Mean ΔFWHM: {mean_delta_fwhm:.3f} cm⁻¹ ± {std_delta_fwhm:.3f}")
+print(f"Mean ΔRatio: {mean_delta_ratio:.3f} ± {std_delta_ratio:.3f}")
+print(f"Symmetric Pairs (ΔFWHM < {fwhm_thresh} & ΔRatio < {ratio_thresh}): {symmetry_percent:.1f}%")
+
+# === Normalize Peak Separation Distance for colormap ===
+all_dists = [item[0] for item in plot_data]
+dist_norm = mcolors.Normalize(vmin=min(all_dists), vmax=max(all_dists))
+cmap = cm.jet
+
+# === Plotting by marker shape ===
+fig, ax = plt.subplots(figsize=(10, 6))
+annotations = []
+
+# === Draw gray lines between each pair (Peak 1 and Peak 2 from the same spectrum) ===
+for i in range(0, len(plot_data), 2):
+    if i + 1 < len(plot_data):
+        x1, y1 = plot_data[i][2], plot_data[i][1]  # FWHM, Ratio for Peak 1
+        x2, y2 = plot_data[i + 1][2], plot_data[i + 1][1]  # FWHM, Ratio for Peak 2
+        ax.plot([x1, x2], [y1, y2], color='gray', linestyle='-', linewidth=1, alpha=0.5)
+
+
+for vol_label in volume_labels:
+    marker = volume_to_marker[vol_label]
+    xs, ys, cs, labels = [], [], [], []
+    for (dist, ratio, fwhm, label, d) in plot_data:
+        if day_to_volume.get(d, "Unknown") == vol_label:
+            xs.append(fwhm)              # Now x is FWHM
+            ys.append(ratio)             # y stays the same
+            cs.append(cmap(dist_norm(dist)))  # Color by peak distance
+            labels.append(label)
+    scatter = ax.scatter(xs, ys, c=cs, marker=marker, edgecolors='black', s=60, label=vol_label)
+    scatter.labels = labels
+
+# === Cursor Hover with correct label mapping ===
+cursor = mplcursors.cursor(hover=True)
+
+@cursor.connect("add")
+def on_add(sel):
+    scatter_artist = sel.artist
+    index = sel.index
+    if hasattr(scatter_artist, "labels"):
+        sel.annotation.set_text(scatter_artist.labels[index])
+
+# === Axes and legend ===
+ax.set_xlabel("FWHM (cm⁻¹)")  # x-axis now FWHM
+ax.set_ylabel("Avg. Ratio of Peak Heights")
+ax.set_title("Raman: FWHM vs Height Ratio\n(Peak Separation Color, Day Shape)")
+ax.grid(True)
+
+# === Colorbar ===
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=dist_norm)
+sm.set_array([])
+cbar = plt.colorbar(sm, ax=ax)
+cbar.set_label("Peak Separation Distance (cm⁻¹)")
+
+# === Marker Legend ===
+ax.legend(title="KBr Volume")
+
+plt.tight_layout()
+plt.show()
+------------------------------------------------------------------------
+Data Renormalization.py
+Description: In case the Raman Spectroscopy laser shuts off and messes with the magnitude of the laser, use this code to match up mins and maxs across days.
+How To Use: Change file_path to your desired excel file. Change location_to_save to where you want the renormalized data to be.
+
+import pandas as pd
+from scipy.signal import medfilt
+import numpy as np
+
+file_path = "example.xlsx"
+location_to_save = "example_normalized.xlsx
+
+# === Step 1: Load data from Excel ===
+df = pd.read_excel(file_path, skiprows=[1])
+
+# === Step 2: Clean column headers ===
+df.columns = df.columns.str.strip()
+df.columns.values[0] = "Raman Shift"
+
+# === Step 3: Extract date from headers ===
+def extract_date(header):
+    parts = str(header).split("|")
+    return parts[0].strip() if len(parts) > 1 else "Unknown"
+
+original_headers = df.columns[1:]
+dates = [extract_date(col) for col in original_headers]
+
+# === Step 4: Prepare data ===
+df_raman = df.copy()
+df_raman.set_index("Raman Shift", inplace=True)
+
+# === Step 5: Group columns by date ===
+date_groups = {}
+for col, date in zip(original_headers, dates):
+    date_groups.setdefault(date, []).append(col)
+
+# === Step 6: Get global min and max over ALL data ===
+global_min = df_raman.min().min()
+global_max = df_raman.max().max()
+print(f"Global min: {global_min:.2f}, Global max: {global_max:.2f}")
+
+# === Step 7: Normalize each day's spectra using min-max scaling to global range ===
+df_scaled = df_raman.copy()
+for date, cols in date_groups.items():
+    day_data = df_raman[cols]
+    day_min = day_data.min().min()
+    day_max = day_data.max().max()
+    
+    if day_max == day_min:
+        print(f"Warning: Day {date} has flat spectra; skipping scaling.")
+        continue
+
+    # Apply min-max normalization to global range
+    scaled = (day_data - day_min) / (day_max - day_min)  # scale to 0–1
+    scaled = scaled * (global_max - global_min) + global_min  # scale to global min–max
+    df_scaled[cols] = scaled
+
+    print(f"Scaled {date}: local min {day_min:.2f}, max {day_max:.2f} → global min {global_min:.2f}, max {global_max:.2f}")
+
+# === Step 8: Save output ===
+df_scaled.reset_index(inplace=True)
+df_scaled.to_excel(location_to_save, index=False)
+------------------------------------------------------------------------
+Fake Data Constructor.py
+Description: Generates fake data?
+How to Use: I don't really see why anyone would want to use this... Anyways:
+
+Generates a 1D signal with:
+    - 1 to 4 sharp Gaussian peaks at random locations
+    - 1 forced sharp Gaussian peak near the start (index 5-10)
+    - 1 to 2 broad Gaussian hills placed away from sharp peaks
+    - Low frequency structured noise and white noise
+    
+    Parameters:
+    - n: length of the signal array
+    - x_start, x_end: range for x-axis values
+    - random_seed: int or None for reproducibility
+    
+    Returns:
+    - x: numpy array of x-axis values
+    - signal: numpy array of the generated signal
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import gaussian
+from numpy.fft import ifft
+import time
+
+def generate_signal(n=1500, x_start=0, x_end=1200, random_seed=None):
+    if random_seed is not None:
+        np.random.seed(random_seed)
+    
+    x = np.linspace(x_start, x_end, n)
+    signal = np.zeros(n)
+    
+    # 1. Sharp Gaussian peaks
+    sharp_centers = []
+    sharp_heights = []
+    num_bumps = np.random.randint(1, 5)
+    
+    for _ in range(num_bumps):
+        center = np.random.randint(0, n)
+        width = np.random.randint(2, 5)
+        height = np.random.uniform(300, 450)
+        
+        bump = height * gaussian(n, std=width)
+        bump = np.roll(bump, center - n // 2)
+        signal += bump
+        
+        sharp_centers.append(center)
+        sharp_heights.append(height)
+    
+    # 2. Forced sharp peak near start (index 5-10)
+    forced_center = np.random.randint(5, 11)
+    if sharp_heights:
+        max_height = max(sharp_heights)
+    else:
+        max_height = 400
+        
+    forced_height = max_height * np.random.uniform(0.6, 0.8)
+    forced_width = np.random.randint(2, 5)
+    
+    forced_peak = forced_height * gaussian(n, std=forced_width)
+    forced_peak = np.roll(forced_peak, forced_center - n // 2)
+    signal += forced_peak
+    
+    sharp_centers.append(forced_center)
+    sharp_heights.append(forced_height)
+    
+    # 3. Broad hills away from sharp peaks
+    num_hills = np.random.randint(1, 3)
+    min_distance = 200
+    hill_attempts = 0
+    max_attempts = 20
+    added_hills = 0
+    
+    while added_hills < num_hills and hill_attempts < max_attempts:
+        center = np.random.randint(0, n)
+        if all(abs(center - c) > min_distance for c in sharp_centers):
+            width = np.random.randint(100, 300)
+            height = np.random.uniform(40, 75)
+            hill = height * gaussian(n, std=width)
+            hill = np.roll(hill, center - n // 2)
+            signal += hill
+            added_hills += 1
+        hill_attempts += 1
+    
+    # 4. Low-frequency structured noise
+    freq_noise = (np.random.randn(n) + 1j * np.random.randn(n))
+    low_pass_window = np.exp(-np.linspace(0, 8, n))
+    freq_noise *= low_pass_window
+    time_noise = np.real(ifft(freq_noise))
+    
+    # 5. Add noise to signal
+    signal += 5 * time_noise
+    signal += 5 * np.random.randn(n)
+    
+    return x, signal
+
+
+# Example usage:
+random_seed = int(time.time())
+x, signal = generate_signal(random_seed=random_seed)
+plt.figure(figsize=(12, 4))
+plt.plot(x, signal, color='darkgreen')
+plt.title("Random Data with Forced Sharp Peak and Conditional Broad Hills")
+plt.xlabel("x")
+plt.ylabel("Signal")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+------------------------------------------------------------------------
+AFTER THIS IS ICA, PCA, and NMF ANALYSIS (not likely to be too relevant)
+------------------------------------------------------------------------
+Spectrum Reconstruction (NMF and PCA)
+Description: Reconstructs the spectra using PCA and NMF data.
+How to Use: Change the file_path to what is needed, alter n_components_abc and n_samples_to_plot to alter the graph.
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA, NMF, TruncatedSVD
+
+file_path = "example.xlsx"
+n_components_pca = 5
+n_components_nmf = 5
+n_samples_to_plot = 3
+
+
+df = pd.read_excel(file_path)
+data = df.T  #each row = one spectrum, columns = Raman shifts
+sample_labels = data.index.astype(str).tolist()  # sample names now are original column headers
+
+#Standardize data
+scaler = StandardScaler()
+data_std = scaler.fit_transform(data)
+
+#Denoise with TruncatedSVD
+svd = TruncatedSVD(n_components=7, random_state=42)
+data_svd = svd.fit_transform(data_std)
+
+#PCA Reconstruction
+pca_model = PCA(n_components=n_components_pca)
+X_pca = pca_model.fit_transform(data_std)
+X_pca_reconstructed_std = X_pca @ pca_model.components_ + pca_model.mean_
+X_pca_reconstructed = scaler.inverse_transform(X_pca_reconstructed_std)
+
+#NMF reconstruction
+data_min = data.min().min()
+data_shifted = data - data_min if data_min < 0 else data.copy()
+
+nmf_model = NMF(n_components=n_components_nmf, init='random', random_state=42, max_iter=1000)
+W = nmf_model.fit_transform(data_shifted)
+H = nmf_model.components_
+X_nmf_reconstructed = W @ H  # in shifted scale
+if data_min < 0:
+    X_nmf_reconstructed += data_min  # shift back
+
+#Double-Checking x-axis
+try:
+    wavenumbers = data.columns.astype(float)
+except:
+    wavenumbers = np.arange(data.shape[1])
+
+#Plot some random sample reconstructions
+np.random.seed(42)
+sample_indices = np.random.choice(data.shape[0], size=n_samples_to_plot, replace=False)
+
+for idx in sample_indices:
+    original = data.iloc[idx].values
+    reconstructed_pca = X_pca_reconstructed[idx]
+    reconstructed_nmf = X_nmf_reconstructed[idx]
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(wavenumbers, original, label='Original', color='black', linewidth=2)
+    plt.plot(wavenumbers, reconstructed_pca, label='PCA Reconstruction', color='blue', linestyle='--')
+    plt.plot(wavenumbers, reconstructed_nmf, label='NMF Reconstruction', color='green', linestyle='-.')
+    plt.title(f"Spectrum {sample_labels[idx]} - Reconstruction Comparison")
+    plt.xlabel("Raman Shift (cm⁻¹)")
+    plt.ylabel("Intensity")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+------------------------------------------------------------------------
+PCA Visualization.py
+Description: Comparison of PC1 vs PC2 plotting
+How to Use: Insert your file_path, change n_components based on preference
+
+
+# %matplotlib qt
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA, TruncatedSVD
+import mplcursors  # pip install mplcursors
+
+file_path = "example.xlsx"
+n_components = 5
+
+df = pd.read_excel(file_path)
+x_axis = df.iloc[:, 0].values
+spectra_df = df.iloc[:, 1:]
+
+data = spectra_df.T
+sample_labels = data.index.astype(str).tolist()
+
+#Extract Sample Dates for Coloring
+def extract_date(label):
+    parts = str(label).split("|")
+    return parts[0].strip() if len(parts) > 1 else "Unknown"
+
+sample_dates = [extract_date(label) for label in sample_labels]
+unique_dates = sorted(set(sample_dates))
+date_to_color = {date: plt.cm.tab20(i / len(unique_dates)) for i, date in enumerate(unique_dates)}
+sample_colors = [date_to_color[date] for date in sample_dates]
+
+scaler = StandardScaler()
+data_std = scaler.fit_transform(data)
+
+#Denoising with TruncatedSV
+svd = TruncatedSVD(n_components=7, random_state=42)
+data_svd = svd.fit_transform(data_std)
+
+#PCA Dimensionality Reduction
+pca = PCA(n_components=n_components, random_state=42)
+S_pca = pca.fit_transform(data_svd)
+
+#PCA Component Metrics
+variances = np.var(S_pca, axis=0)
+mean_magnitudes = np.mean(np.abs(S_pca), axis=0)
+
+pca_importance_df = pd.DataFrame({
+    'PC': [f'PC{i+1}' for i in range(n_components)],
+    'Variance': variances,
+    'Mean Magnitude': mean_magnitudes
+})
+
+print("PCA component importance metrics:")
+print(pca_importance_df)
+
+#PCA to 2D for Visualization
+pca_2d = PCA(n_components=2, random_state=42)
+pca_2d_result = pca_2d.fit_transform(data_std)
+
+#Shift to Non-negative for Visualization
+pca_2d_nonneg = pca_2d_result - np.min(pca_2d_result, axis=0)
+
+#Color Scaling by PCA magnitude
+color_values_pca = np.linalg.norm(pca_2d_nonneg, axis=1)
+norm_color_pca = (color_values_pca - color_values_pca.min()) / (color_values_pca.max() - color_values_pca.min())
+
+scatter1 = plt.scatter(pca_2d_nonneg[:, 0], pca_2d_nonneg[:, 1],
+                       color=sample_colors, edgecolors='k', alpha=0.85)
+
+plt.title("2D PCA (Shifted to Non-negative) of Standardized Spectral Data")
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.grid(True)
+
+#Legend
+NUM_COLUMNS = 1
+LEGEND_TITLE = "Sample Date"
+LEGEND_FONT_SIZE = 9
+LEGEND_LOCATION = "upper left"
+LEGEND_BOX_ANCHOR = (1.05, 1)
+legend_handles = [
+    mpatches.Patch(color=date_to_color[date], label=date)
+    for date in unique_dates
+]
+
+plt.legend(
+    handles=legend_handles,
+    title=LEGEND_TITLE,
+    title_fontsize=LEGEND_FONT_SIZE,
+    fontsize=LEGEND_FONT_SIZE,
+    loc=LEGEND_LOCATION,
+    bbox_to_anchor=LEGEND_BOX_ANCHOR,
+    ncol=NUM_COLUMNS,
+    borderaxespad=0.5
+)
+
+# === Hover Info ===
+cursor1 = mplcursors.cursor(scatter1, hover=True)
+@cursor1.connect("add")
+def on_add(sel):
+    sel.annotation.set(text=f"Sample: {sample_labels[sel.index]}")
+
+plt.show()
+------------------------------------------------------------------------
+PCA Explained Variance
+Description: Show the explained variance based on number of components
+How to Use: Upload your file path, then change n_components to visualize the explained variance.
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+file_path = "example.xlsx"
+n_components = 5
+
+data = pd.read_excel(file_path)
+#Compute global baseline
+individual_means = data.mean(axis=1)
+global_baseline = individual_means.mean()
+print(f"Global average baseline: {global_baseline:.4f}")
+
+pca = PCA()
+pca_result = pca.fit_transform(data)
+
+#Plot top 5 PCA components
+plt.figure(figsize=(10, 6))
+
+for i in range(n_components):  # PC1 to PC5
+    component = pca.components_[i]
+
+    # Flip sign if negative-dominant
+    if np.mean(component) < 0:
+        component = -component
+
+    # Median-center and shift to start at zero
+    component_zeroed = component - np.median(component)
+  
+    # Add to plot
+    plt.plot(x_axis, component_zeroed, label=f'PC{i+1}')
+
+plt.xlim(350, 550)
+plt.ylim(-0.35, 0.3)
+plt.xlabel("Raman Shift")
+plt.ylabel("Normalized Component Intensity")
+plt.title("Top 5 PCA Components (Overlaid, Median-Centered, Peak Normalized)")
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
+------------------------------------------------------------------------
+NMF Explained Variance
+Description: Explained variance for NMF by number of components
+How to Use: Uploaded Excel file change n_components.
+
+# %matplotlib qt  # interactive window
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import NMF, TruncatedSVD
+import mplcursors  # pip install mplcursors
+
+file_path = "example.xlsx"
+n_components = 5
+
+df = pd.read_excel(file_path)
+x_axis = df.iloc[:, 0].values
+spectra_df = df.iloc[:, 1:]
+data = spectra_df.T
+sample_labels = data.index.astype(str).tolist()
+
+#Extract Sample Dates for Color
+def extract_date(label):
+    parts = str(label).split("|")
+    return parts[0].strip() if len(parts) > 1 else "Unknown"
+
+sample_dates = [extract_date(label) for label in sample_labels]
+unique_dates = sorted(set(sample_dates))
+date_to_color = {date: plt.cm.tab20(i / len(unique_dates)) for i, date in enumerate(unique_dates)}
+sample_colors = [date_to_color[date] for date in sample_dates]
+
+scaler = StandardScaler()
+data_std = scaler.fit_transform(data)
+
+#Denoising with TruncatedSVD
+svd = TruncatedSVD(n_components=7, random_state=42)
+data_svd = svd.fit_transform(data_std)
+
+#Shift data to positive (required for NMF)
+data_shifted = data_svd - np.min(data_svd)
+
+#NMF Dimensionality Reduction
+nmf = NMF(n_components=n_components, init='nndsvd', random_state=42, max_iter=1000)
+W = nmf.fit_transform(data_shifted)
+H = nmf.components_
+
+#NMF Component Importance
+variances = np.var(W, axis=0)
+mean_magnitudes = np.mean(W, axis=0)
+
+nmf_importance_df = pd.DataFrame({
+    'Component': [f'NMF{i+1}' for i in range(n_components)],
+    'Variance': variances,
+    'Mean Magnitude': mean_magnitudes
+})
+
+print("NMF component importance metrics:")
+print(nmf_importance_df)
+
+Reduce to 2D for Visualization
+nmf_2d = NMF(n_components=2, init='nndsvd', random_state=42, max_iter=1000)
+W_2d = nmf_2d.fit_transform(data_shifted)
+
+#Color scaling by NMF 2D magnitude
+color_values_nmf = np.linalg.norm(W_2d, axis=1)
+norm_color_nmf = (color_values_nmf - color_values_nmf.min()) / (color_values_nmf.max() - color_values_nmf.min())
+
+#Scatter Plot
+scatter1 = plt.scatter(W_2d[:, 0], W_2d[:, 1],
+                       color=sample_colors, edgecolors='k', alpha=0.85)
+
+plt.title("2D NMF of Standardized Spectral Data")
+plt.xlabel("NMF1")
+plt.ylabel("NMF2")
+plt.grid(True)
+'''
+#Optional legend
+NUM_COLUMNS = 1
+LEGEND_TITLE = "Sample Date"
+LEGEND_FONT_SIZE = 9
+LEGEND_LOCATION = "upper left"
+LEGEND_BOX_ANCHOR = (1.05, 1)
+legend_handles = [
+    mpatches.Patch(color=date_to_color[date], label=date)
+    for date in unique_dates
+]
+
+plt.legend(
+    handles=legend_handles,
+    title=LEGEND_TITLE,
+    title_fontsize=LEGEND_FONT_SIZE,
+    fontsize=LEGEND_FONT_SIZE,
+    loc=LEGEND_LOCATION,
+    bbox_to_anchor=LEGEND_BOX_ANCHOR,
+    ncol=NUM_COLUMNS,
+    borderaxespad=0.5
+)
+'''
+
+# === Hover Info ===
+cursor1 = mplcursors.cursor(scatter1, hover=True)
+@cursor1.connect("add")
+def on_add(sel):
+    sel.annotation.set(text=f"Sample: {sample_labels[sel.index]}")
+
+plt.show()
+------------------------------------------------------------------------
+ICA Explained Variance.py
+Description: Explained Variance by ICA by number of components
+How to Use: Upload your file path and change n_components to preferred (5 default)
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.decomposition import FastICA
+
+file_path = "example.xlsx"
+n_components = 5
+
+df = pd.read_excel(file_path)
+df_clean = df.drop(index=0).reset_index(drop=True)
+x_axis = df_clean["REMOVE"].astype(float).values
+spectra = df_clean.drop(columns=["REMOVE"]).astype(float)
+
+#ICA
+ica = FastICA(n_components=n_components, random_state=42, max_iter=1000)
+ica_result = ica.fit_transform(spectra.T)
+components = ica.components_
+
+#Plot ICA components
+plt.figure(figsize=(10, 6))
+
+for i in range(n_components):
+    component = components[i]
+
+    # Flip IC1 and IC4 for visual alignment
+    if i in [0, 3]:
+        component = -component
+
+    component_zeroed = (component - np.median(component)) * 10000
+
+    plt.plot(x_axis, component_zeroed, label=f'IC{i+1}')
+
+plt.xlim(300, 600)
+plt.ylim(-10, 10)
+plt.xlabel("Raman Shift (cm$^{-1}$)")
+plt.ylabel("Normalized Component Intensity")
+plt.title("Top 5 ICA Components (Median-Centered, Scaled)")
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
+
+#ICA mixing matrix (sample weights)
+ica_result[:, 0] *= -1
+ica_result[:, 3] *= -1
+ica_df = pd.DataFrame(ica_result, columns=[f"IC{i+1}" for i in range(ica_result.shape[1])])
+
+print("ICA Mixing Matrix (first x samples):")
+print(ica_df.head())
+------------------------------------------------------------------------
+IC1 vs IC2.py
+Description: IC1 component vs IC2 component, plotted
+How to Use: Change the file_path
+
+# %matplotlib qt  # Optional for interactive windows in Spyder
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import FastICA, NMF, PCA, TruncatedSVD
+import mplcursors  # pip install mplcursors if needed
+from matplotlib import cm
+
+file_path = "sample.xlsx"
+    
+# === Load data ===
+df = pd.read_excel(file_path)
+
+x_axis = df.iloc[:, 0].values
+spectra_df = df.iloc[:, 1:]
+data = spectra_df.T
+sample_labels = data.index.astype(str).tolist()
+
+def extract_date(label):
+    parts = str(label).split("|")
+    return parts[0].strip() if len(parts) > 1 else "Unknown"
+
+sample_dates = [extract_date(label) for label in sample_labels]
+unique_dates = sorted(set(sample_dates))
+date_to_color = {date: cm.Set2(i / len(unique_dates)) for i, date in enumerate(unique_dates)}
+# date_to_color = {date: cm.viridis(i / len(unique_dates)) for i, date in enumerate(unique_dates)}
+
+sample_colors = [date_to_color[date] for date in sample_dates]
+
+data = spectra_df.T
+sample_labels = data.index.astype(str).tolist()
+scaler = StandardScaler()
+data_std = scaler.fit_transform(data)
+
+#Denoised with TruncatedSVD
+svd = TruncatedSVD(n_components=7, random_state=42)
+data_svd = svd.fit_transform(data_std)
+
+#ICA on denoised
+n_components = 5
+ica = FastICA(n_components=n_components, random_state=42)
+S_ica = ica.fit_transform(data_svd)
+
+#Make nonnegative by shifting
+S_ica_nonneg = S_ica - np.min(S_ica, axis=0)
+
+ica_df = pd.DataFrame(S_ica_nonneg, columns=[f"IC{i+1}" for i in range(n_components)], index=sample_labels)
+
+variances = np.var(S_ica_nonneg, axis=0)
+mean_magnitudes = np.mean(S_ica_nonneg, axis=0)
+
+ica_importance_df = pd.DataFrame({
+    'IC': [f'IC{i+1}' for i in range(n_components)],
+    'Variance': variances,
+    'Mean Magnitude': mean_magnitudes
+})
+
+print("Non-negative ICA component importance metrics:")
+print(ica_importance_df)
+
+# === Reduce to 2D using ICA again (with non-neg shift) ===
+ica_2d = FastICA(n_components=2, random_state=42)
+ica_2d_result = ica_2d.fit_transform(data_std)
+ica_2d_nonneg = ica_2d_result - np.min(ica_2d_result, axis=0)
+
+plt.figure(figsize=(8, 6))
+scatter = plt.scatter(ica_2d_nonneg[:, 0], ica_2d_nonneg[:, 1],
+                      c=sample_colors, edgecolors='k', alpha=0.85)
+plt.colorbar(label='Color = Sample Date')
+plt.title("2D ICA (Shifted to Non-negative) of Standardized Spectral Data")
+plt.xlabel("IC1")
+plt.ylabel("IC2")
+plt.grid(True)
+
+#Hover info
+cursor1 = mplcursors.cursor(scatter, hover=True)
+@cursor1.connect("add")
+def on_add(sel):
+    sel.annotation.set(text=f"Sample: {sample_labels[sel.index]}")
+
+plt.show()
+
