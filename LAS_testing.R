@@ -3,15 +3,7 @@ library(pracma)
 library(data.table)
 library(minpack.lm)
 library(plotly)
-
-parse_LAS <- function(data){
-    mat <- do.call(
-        rbind,
-        strsplit(trimws(data[,1]), "\\s+")
-    )
-    storage.mode(mat) <- "numeric"
-    return(as.data.frame(mat))   
-}
+library(mclust)
 
 tidy_conversion <- function(data) {
    x_axis <- data[, 1]
@@ -22,12 +14,10 @@ tidy_conversion <- function(data) {
            names_to = "id", 
            values_to = "intensity"
        ) |>
-       mutate(
-           id = as.numeric(sub("V", "", id)) - 1
-       )
+       mutate(id = as.numeric(sub("V", "", id)) - 1)
 }
 
-find_peak_locations <- function(data){
+find_peak_locations <- function(data) {
     data <- data[data$V1 > 375 & data$V1 < 420, ]
     x_axis <- data$V1
     
@@ -134,10 +124,17 @@ auto_gaussian_summary <- function(data, peak_locations) {
     bind_rows(results)
 }
 
-# file_path <- "data/default LAS/300x300/Large Area Scan.csv"
-# raw <- read.csv(file_path, header = FALSE)
-# data <- raw
-# data <- parse_LAS(data)
+size <- 300
+file_path <- paste0(
+    "data/default LAS/", 
+    size, "x", size, 
+    "/Large Area Scan.csv"
+    )
+
+compute_time <- round(0.00588271 * size ^ 2 + 2.21832, 2)
+paste0("Time to Compute: ", compute_time %/% 60, ":", (compute_time %% 60))
+raw <- fread(file_path, header = FALSE)
+data <- raw
 
 peak_summary <- find_peak_locations(data)
 gaussian_results <- auto_gaussian_summary(data, peak_summary)
@@ -149,11 +146,11 @@ peak_summary <- peak_summary |>
         ratio = ifelse(ratio > 1, ratio, 1/ratio)
     ) |>
     merge(gaussian_results, by = "id")
-
+''
 heatmap_df <- peak_summary |>
     mutate(
-        x = ((id - 1) %% 300) + 1,
-        y = ((id - 1) %/% 300) + 1,
+        x = ((id - 1) %% size) + 1,
+        y = ((id - 1) %/% size) + 1,
         curve = intensity1 > 730 & intensity2 > 730,
         diff.x = ifelse(curve, diff.x, 15),
         diff.x = ifelse(diff.x > 26 | diff.x < 18, 15, diff.x),
@@ -194,23 +191,25 @@ kmeans_vars <- heatmap_df |>
     select(
         diff.x, diff.y, mu1, mu2, intensity_ratio, A1, A2, fwhm1, fwhm2, 
         area1, area2, area_ratio, snr, rmse, r_squared, PC1, PC2, PC3, PC4, PC5
-        )
+        ) |>
+    scale()
 
-cluster_num <- 8
+cluster_num <- 4
 clustering_results <- kmeans(
     kmeans_vars, 
-    center = cluster_num)
+    centers = cluster_num)
+
 ordering <- order(clustering_results$centers[, 1])
 mapping <- setNames(1:cluster_num, ordering)
 clustering_results$cluster <- mapping[as.character(clustering_results$cluster)]
 
-heatmap_df$cluster <- clustering_results$cluster * 4
+heatmap_df$cluster <- (clustering_results$cluster - 1) * 6.15
 
 p <- ggplot(heatmap_df, aes(x = x, y = y, fill = cluster)) +
     geom_tile() +
     coord_equal() +
     scale_y_reverse() +
-    scale_fill_gradientn(colors = c("red", "yellow", "blue")) + 
+    scale_fill_gradientn(colors = c("lightblue", "yellow", "red")) + 
     labs(fill = "Clustering") + 
     theme_bw()
 p
